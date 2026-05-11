@@ -47,6 +47,7 @@ a {
     display: flex;
 }
 
+/* MARK: vertical wrapper */
 .vertical_wrap {
     position: fixed;
     height: 100%;
@@ -161,7 +162,7 @@ a {
                 color: #334252;
                 background: #fff;
             }
-/* text*/
+/* MARK: text*/
 .main_container {
     width: calc(100% - 20px);
     position: relative;
@@ -178,6 +179,7 @@ a {
         width: 100%;
     }
 
+/* MARK: top bar */
 .top_bar .menu_icon {
     color: #fff;
     font-size: 24px;
@@ -197,6 +199,7 @@ a {
         color: #fff;
     }
 
+/* MARK: main content */
 .main_container .container {
     padding: 25px;
     height: calc(100% - 60px);
@@ -240,6 +243,7 @@ a {
         padding-bottom: 20px;
 }
 
+/* lists */
 .listing_title {
     font-size: 24px;
     font-weight: 700;
@@ -278,6 +282,21 @@ a {
     margin-left: 30px;
 }
 
+/* wrap list */
+.wrap_list {
+    columns: 320px;
+    column-gap: 40px;
+    line-height: 1.2;
+}
+
+.wrap_list li {
+    break-inside: avoid;
+    margin-bottom: 8px;
+    margin-bottom: 4px;
+}
+
+
+/* MARK: responsive design */
 @media (max-width: 768px) {
     .top_bar .menu_icon {
         display: inline-block;
