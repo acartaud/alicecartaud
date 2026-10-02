@@ -88,6 +88,67 @@ def fmt_openalex_author(name):
         return f"{fam}, {ini}"
     return name
 
+def _api_json(url):
+    req = urllib.request.Request(url, headers={"User-Agent": f"publi-updater ({MAILTO})"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.load(r)
+
+OSF_USER_ID = "fyue4"  # Alice Cartaud sur OSF
+
+STOP_WORDS = {"the", "a", "an", "of", "in", "on", "and", "with", "to", "for",
+              "from", "at", "by", "is", "are", "as", "or", "how", "when", "no"}
+
+def _sig_words(title):
+    words = []
+    for w in re.findall(r"[a-z]+", title.lower()):
+        if w in STOP_WORDS or len(w) <= 2:
+            continue
+        words.append(w[:-1] if w.endswith("s") and len(w) > 3 else w)  # stemming pluriel
+    return words
+
+def _api_json(url):
+    req = urllib.request.Request(url, headers={"User-Agent": f"publi-updater ({MAILTO})"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.load(r)
+
+def find_materials(title):
+    """Cherche un supplementary material pour l'article:
+    - Zenodo: recherche par debut de titre (record d'Alice).
+    - OSF: projets d'Alice Cartaud dont le titre recoupe l'article.
+    Retourne [(label, url), ...] ou vide."""
+    results = []
+    # --- Zenodo
+    try:
+        phrase = " ".join(re.findall(r"[A-Za-z]+", title)[:6])
+        q = urllib.parse.quote(f'metadata.title:"{phrase}"')
+        d = _api_json(f"https://zenodo.org/api/records?q={q}&size=3")
+        for h in d.get("hits", {}).get("hits", []):
+            t = h.get("metadata", {}).get("title", "") or ""
+            if norm_title(title) in norm_title(t):
+                results.append(("Zenodo", h.get("links", {}).get("self_html") or f"https://zenodo.org/records/{h['id']}"))
+    except Exception as e:
+        print(f"WARNING Zenodo: {e}")
+    # --- OSF (projets d'Alice Cartaud uniquement)
+    try:
+        arts = set(_sig_words(title))
+        d = _api_json(f"https://api.osf.io/v2/users/{OSF_USER_ID}/nodes/?page[size]=20")
+        best, best_n = None, 0
+        for n in d.get("data", []):
+            t = n.get("attributes", {}).get("title", "") or ""
+            overlap = len(arts & set(_sig_words(t)))
+            if overlap > best_n:
+                best, best_n = (n.get("links", {}).get("html"), t), overlap
+        if best and best_n >= 3:
+            results.append(("OSF", best[0]))
+    except Exception as e:
+        print(f"WARNING OSF: {e}")
+    seen, out = set(), []
+    for label, url in results:
+        if url and url not in seen:
+            seen.add(url)
+            out.append((label, url))
+    return out
+
 def apa_entry(e):
     authors = [fmt_openalex_author(a) for a in e["authors"] if a]
     if not authors:
@@ -103,6 +164,9 @@ def apa_entry(e):
     out += f" ({e['year']}). {e['title']}. <i>{e['venue']}</i>" + (f", {tail}" if tail else "") + "."
     if e["doi"]:
         out += f' doi: <a href="https://doi.org/{e["doi"]}" target="_blank">{e["doi"]}</a>'
+    if e.get("materials"):
+        links = ", ".join(f'<a href="{u}" target="_blank">{lbl}</a>' for lbl, u in e["materials"])
+        out += (f' <span style="font-size: small;"><br>materials: {links}</span>')
     return out
 
 def main():
@@ -129,6 +193,10 @@ def main():
               '                                </p>\r\n'
               '                            </li>\r\n')
         block += li
+        mats = find_materials(e["title"])
+        if mats:
+            e["materials"] = mats
+            print(f"   materials: {mats}")
         print(f"+ Ajoute: {e['title'][:70]}... ({e['doi'] or 'sans DOI'})")
 
     insert_at = m.end(1)
