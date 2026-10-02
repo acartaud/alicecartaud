@@ -207,6 +207,8 @@ def main():
     with open("new_articles.txt", "w", encoding="utf-8") as f:
         for e in new:
             f.write(f"- {e['title']} ({e['venue']}, {e['year']})\n")
+            for lbl, url in e.get("materials", []):
+                f.write(f"  materials: {lbl} - {url}\n")
     print("publi.html mis a jour.")
 
 if __name__ == "__main__":
