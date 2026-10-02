@@ -39,14 +39,18 @@ def fetch_openalex():
         venue = ((w.get("primary_location") or {}).get("source") or {}).get("display_name")
         if not venue:
             continue
+        biblio = w.get("biblio") or {}
+        pages = biblio.get("first_page") or ""
+        if pages and biblio.get("last_page") and biblio["last_page"] != pages:
+            pages += "-" + biblio["last_page"]
         works.append({
             "title": w.get("title") or "",
             "venue": venue,
             "year": w.get("publication_year") or "",
             "doi": (w.get("doi") or "").replace("https://doi.org/", ""),
-            "authors": [a.get("display_name", "") for a in w.get("authorships", [])],
-            "volume": "",
-            "pages": "",
+            "authors": [(a.get("author") or {}).get("display_name", "") for a in w.get("authorships", [])],
+            "volume": (w.get("biblio") or {}).get("volume") or "",
+            "pages": pages,
         })
     print(f"OpenAlex: {len(works)} articles de revue")
     return works
@@ -88,8 +92,9 @@ def apa_entry(e):
     authors = [fmt_openalex_author(a) for a in e["authors"] if a]
     if not authors:
         authors = ["Cartaud, A."]
-    out = f"<strong>{authors[0]}</strong>"
-    rest = authors[1:]
+    formatted = [f"<strong>{a}</strong>" if "cartaud" in a.lower() else a for a in authors]
+    out = formatted[0]
+    rest = formatted[1:]
     if len(rest) == 1:
         out += f", & {rest[0]}"
     elif rest:
