@@ -1,78 +1,55 @@
 # -*- coding: utf-8 -*-
 """
-Met a jour la section "Articles" de publi.html depuis le profil Google Scholar.
-- Exclut conferences/congres/workshops, prepublications, these.
-- Detecte les nouveaux articles (non presents dans publi.html).
-- Recupere les metadonnees (DOI, auteurs, revue) via Crossref.
-- Insere l'entree au format APA existant, en tete de liste.
+Met a jour la section "Articles" de publi.html depuis OpenAlex
+(base bibliographique officielle, gratuite, sans blocage - remplace
+ le scraping Google Scholar bloque par GitHub Actions).
+Ne garde que les ARTICLES de revue (type="article" avec une revue),
+exclut preprints, conferences, these, datasets.
 """
 import html
 import json
 import re
 import sys
-import time
-import random
 import urllib.parse
 import urllib.request
 
-SCHOLAR_ID = "mkzYFXoAAAAJ"
-SCHOLAR_URL = f"https://scholar.google.com/citations?user={SCHOLAR_ID}&hl=en&pagesize=100"
 PUBLI_FILE = "publi.html"
-UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-      "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
-
-EXCLUDE_VENUE = [
-    "conference", "congress", "meeting", "workshop", "symposium",
-    "escop", "icsp", "icps", "suppl", "université", "universite",
-    "preprint", "dissertation",
-]
+MAILTO = "alice.cartaud@univ-lille.fr"
+AUTHOR_QUERY = "raw_author_name.search:alice cartaud"
 
 def clean(x):
     return html.unescape(re.sub(r"<[^>]+>", "", x or "")).replace("\xa0", " ").strip()
 
 def norm_title(t):
-    return re.sub(r"[^a-z0-9]+", "", t.lower())
+    return re.sub(r"[^a-z0-9]+", "", (t or "").lower())
 
-def fetch(url, tries=3):
-    last = None
-    for i in range(tries):
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": UA})
-            with urllib.request.urlopen(req, timeout=60) as r:
-                return r.read()
-        except Exception as e:  # noqa
-            last = e
-            time.sleep(10 + random.uniform(0, 20))
-    raise RuntimeError(f"Echec de la requete vers {url}: {last}")
-
-def parse_scholar(content):
-    s = content.decode("utf-8", errors="replace")
-    if "gsc_a_tr" not in s:
-        raise RuntimeError("Page Google Scholar illisible (blocage anti-robot ?)")
-    rows = re.findall(r'<tr class="gsc_a_tr">(.*?)</tr>', s, re.S)
-    entries = []
-    for r in rows:
-        title = re.search(r'class="gsc_a_at"[^>]*>(.*?)</a>', r, re.S)
-        metas = [clean(m) for m in re.findall(r'<div class="gs_gray">(.*?)</div>', r, re.S)]
-        year = re.search(r'gsc_a_h[^>]*>(\d{4})', r)
-        venue = metas[1] if len(metas) > 1 else ""
-        entries.append({
-            "title": clean(title.group(1)) if title else "",
+def fetch_openalex():
+    q = urllib.parse.urlencode({
+        "filter": f"{AUTHOR_QUERY},from_publication_date:2015-01-01",
+        "per_page": 100, "mailto": MAILTO,
+    })
+    url = f"https://api.openalex.org/works?{q}"
+    req = urllib.request.Request(url, headers={"User-Agent": f"publi-updater ({MAILTO})"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        data = json.load(r)
+    works = []
+    for w in data.get("results", []):
+        if w.get("type") != "article":
+            continue
+        venue = ((w.get("primary_location") or {}).get("source") or {}).get("display_name")
+        if not venue:
+            continue
+        works.append({
+            "title": w.get("title") or "",
             "venue": venue,
-            "year": int(year.group(1)) if year else 0,
+            "year": w.get("publication_year") or "",
+            "doi": (w.get("doi") or "").replace("https://doi.org/", ""),
+            "authors": [a.get("display_name", "") for a in w.get("authorships", [])],
+            "volume": "",
+            "pages": "",
         })
-    return entries
-
-def is_article(e):
-    v = e["venue"].lower()
-    if not v:
-        return False
-    if any(k in v for k in EXCLUDE_VENUE):
-        return False
-    # abstract de conference publie dans une revue : pages identiques (ex: "58, 224-224")
-    if re.search(r"\b(\d+)-\1\b", v):
-        return False
-    return True
+    print(f"OpenAlex: {len(works)} articles de revue")
+    return works
 
 def get_articles_section(html_src):
     m = re.search(r'(<span class="text">Articles</span>\s*</h1>\s*<ul class="listing_details">)(.*?)(</ul>)',
@@ -81,96 +58,57 @@ def get_articles_section(html_src):
         raise RuntimeError("Section 'Articles' introuvable dans publi.html")
     return m
 
-def known_titles_in_section(section_body):
-    return [clean(li) for li in re.findall(r"<li>(.*?)</li>", section_body, re.S)]
-
 def is_known(entry, known_items):
-    """Connu si le titre apparait dans un <li> existant, OU si un <li>
-    mentionne la meme revue ET la meme annee (les titres peuvent differer)."""
     t = norm_title(entry["title"])
     for item in known_items:
         if t and t in norm_title(item):
             return True
-        venue_words = " ".join(w for w in entry["venue"].split()[:5] if w.isalpha()).lower()
+        # mot-cle canonique de la revue (sans mots vides) + meme annee
+        stop = {"in", "of", "the", "de", "la", "l", "pour", "revue", "journal",
+                "international", "proceedings", "special", "issue", "society", "press"}
+        words = [w.lower() for w in entry["venue"].replace("'", " ").split()
+                 if w.isalpha() and w.lower() not in stop]
         year = str(entry["year"])
-        if venue_words and len(venue_words) > 6 and year:
-            if venue_words in item.lower() and re.search(r"\b" + year + r"\b", item):
+        if words and year:
+            key = words[0]
+            if len(key) > 3 and key in item.lower() and re.search(r"\b" + year + r"\b", item):
                 return True
     return False
 
-def crossref_lookup(title):
-    q = urllib.parse.urlencode({"query.bibliographic": title, "rows": 3})
-    data = json.loads(fetch(f"https://api.crossref.org/works?{q}"))
-    norm = norm_title(title)
-    for it in data.get("message", {}).get("items", []):
-        if norm_title(it.get("title", [""])[0]) == norm:
-            return it
-    return None
+def fmt_openalex_author(name):
+    """'Alice Cartaud' -> 'Cartaud, A.'"""
+    parts = name.rsplit(" ", 1)
+    if len(parts) == 2 and parts[0]:
+        fam, giv = parts[1], parts[0]
+        ini = "".join(p[0] + "." for p in giv.split() if p)
+        return f"{fam}, {ini}"
+    return name
 
-def fmt_author(a):
-    fam = a.get("family", "")
-    ini = "".join(p[0] + "." for p in a.get("given", "").replace("-", " ").split() if p)
-    return f"{fam}, {ini}".strip()
-
-def full_apa(cr, fallback_authors, fallback_year):
-    authors = [fmt_author(a) for a in cr.get("author", [])]
+def apa_entry(e):
+    authors = [fmt_openalex_author(a) for a in e["authors"] if a]
     if not authors:
-        authors = [fallback_authors]
-    year = (cr.get("issued", {}).get("date-parts", [[None]])[0][0]) or fallback_year
-    title = cr.get("title", [""])[0]
-    venue = cr.get("container-title", [""])[0]
-    vol = cr.get("volume", "")
-    page = cr.get("page", "")
-    doi = cr.get("DOI", "")
-    seg = [s for s in [venue, str(vol) if vol else "", str(page) if page else ""] if s]
+        authors = ["Cartaud, A."]
     out = f"<strong>{authors[0]}</strong>"
     rest = authors[1:]
     if len(rest) == 1:
         out += f", & {rest[0]}"
     elif rest:
         out += ", " + ", ".join(rest[:-1]) + ", & " + rest[-1]
-    out += f" ({year}). {title}. <i>{', '.join(seg)}</i>."
-    if doi:
-        out += f' doi: <a href="https://doi.org/{doi}" target="_blank">{doi}</a>'
+    seg = ", ".join(s for s in [e["venue"], e["volume"], e["pages"]] if s)
+    out += f" ({e['year']}). {e['title']}. <i>{seg}</i>."
+    if e["doi"]:
+        out += f' doi: <a href="https://doi.org/{e["doi"]}" target="_blank">{e["doi"]}</a>'
     return out
 
-def scholar_with_fallback():
-    """Tente Google Scholar avec plusieurs User-Agents et delais aleatoires."""
-    uas = [
-        UA,
-        "Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15",
-        "Mozilla/5.0 (compatible; MSIE 10.0; Windows NT 6.1; Trident/6.0)",
-    ]
-    last = None
-    for ua in uas:
-        try:
-            req = urllib.request.Request(SCHOLAR_URL, headers={"User-Agent": ua})
-            with urllib.request.urlopen(req, timeout=60) as r:
-                content = r.read()
-            entries = parse_scholar(content)
-            print(f"Scholar OK (UA: {ua[:35]}...)")
-            return entries
-        except Exception as e:
-            last = e
-            print(f"Scholar echoue (UA {ua[:25]}...): {e}")
-            time.sleep(20 + random.uniform(0, 30))
-    raise RuntimeError(f"Google Scholar bloque toutes les tentatives: {last}")
-
-
 def main():
-    entries = scholar_with_fallback()
-    print(f"Scholar: {len(entries)} entrees")
+    works = fetch_openalex()
 
     with open(PUBLI_FILE, encoding="utf-8", newline="") as f:
         src = f.read()
     m = get_articles_section(src)
-    known = known_titles_in_section(m.group(2))
+    known = [clean(li) for li in re.findall(r"<li>(.*?)</li>", m.group(2), re.S)]
 
-    articles = [e for e in entries if is_article(e)]
-    print(f"Dont {len(articles)} articles (hors conferences/preprints)")
-
-    new = [e for e in articles if not is_known(e, known)]
+    new = [e for e in works if not is_known(e, known)]
     print(f"Nouveaux articles detectes: {len(new)}")
 
     if not new:
@@ -179,21 +117,14 @@ def main():
 
     block = ""
     for e in new:
-        cr = crossref_lookup(e["title"])
-        if cr:
-            entry = full_apa(cr, "Cartaud, A.", e["year"])
-            doi_info = cr.get("DOI", "pas de DOI trouve")
-        else:
-            print(f"WARNING Crossref: aucun resultat pour {e['title']} - entree basique")
-            entry = f"<strong>Cartaud, A.</strong> et al. ({e['year']}). {e['title']}. <i>{e['venue']}</i>."
-            doi_info = "pas de DOI trouve"
+        entry = apa_entry(e)
         li = ('                            <li>\r\n'
               '                                <p class="text">\r\n'
               f'                                    {entry}\r\n'
               '                                </p>\r\n'
               '                            </li>\r\n')
         block += li
-        print(f"+ Ajoute: {e['title'][:70]}... ({doi_info})")
+        print(f"+ Ajoute: {e['title'][:70]}... ({e['doi'] or 'sans DOI'})")
 
     insert_at = m.end(1)
     new_src = src[:insert_at] + "\r\n" + block + src[insert_at:]
