@@ -134,9 +134,32 @@ def full_apa(cr, fallback_authors, fallback_year):
         out += f' doi: <a href="https://doi.org/{doi}" target="_blank">{doi}</a>'
     return out
 
+def scholar_with_fallback():
+    """Tente Google Scholar avec plusieurs User-Agents et delais aleatoires."""
+    uas = [
+        UA,
+        "Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15",
+        "Mozilla/5.0 (compatible; MSIE 10.0; Windows NT 6.1; Trident/6.0)",
+    ]
+    last = None
+    for ua in uas:
+        try:
+            req = urllib.request.Request(SCHOLAR_URL, headers={"User-Agent": ua})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                content = r.read()
+            entries = parse_scholar(content)
+            print(f"Scholar OK (UA: {ua[:35]}...)")
+            return entries
+        except Exception as e:
+            last = e
+            print(f"Scholar echoue (UA {ua[:25]}...): {e}")
+            time.sleep(20 + random.uniform(0, 30))
+    raise RuntimeError(f"Google Scholar bloque toutes les tentatives: {last}")
+
+
 def main():
-    content = fetch(SCHOLAR_URL)
-    entries = parse_scholar(content)
+    entries = scholar_with_fallback()
     print(f"Scholar: {len(entries)} entrees")
 
     with open(PUBLI_FILE, encoding="utf-8", newline="") as f:
