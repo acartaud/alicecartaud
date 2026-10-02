@@ -99,8 +99,8 @@ def apa_entry(e):
         out += f", & {rest[0]}"
     elif rest:
         out += ", " + ", ".join(rest[:-1]) + ", & " + rest[-1]
-    seg = ", ".join(s for s in [e["venue"], e["volume"], e["pages"]] if s)
-    out += f" ({e['year']}). {e['title']}. <i>{seg}</i>."
+    tail = ", ".join(s for s in [e["volume"], e["pages"]] if s)
+    out += f" ({e['year']}). {e['title']}. <i>{e['venue']}</i>" + (f", {tail}" if tail else "") + "."
     if e["doi"]:
         out += f' doi: <a href="https://doi.org/{e["doi"]}" target="_blank">{e["doi"]}</a>'
     return out
