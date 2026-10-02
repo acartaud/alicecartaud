@@ -1,0 +1,78 @@
+name: Mise à jour automatique des publications
+
+on:
+  schedule:
+    # Le 3 de chaque mois à 7h (UTC)
+    - cron: "0 7 3 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-publi:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Mettre à jour publi.html depuis Google Scholar
+        id: update
+        run: |
+          python3 scripts/update_publi.py
+          if [ -s new_articles.txt ]; then
+            echo "new=true" >> "$GITHUB_OUTPUT"
+            cat new_articles.txt
+          else
+            echo "new=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit et push
+        if: steps.update.outputs.new == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add publi.html
+          git commit -m "Nouveaux articles détectés sur Google Scholar [skip ci]"
+          git push
+
+      - name: Préparer le corps du mail
+        if: steps.update.outputs.new == 'true'
+        run: |
+          { echo "De nouveaux articles ont été détectés sur Google Scholar"
+            echo "et ajoutés automatiquement à publi.html :"; echo ""
+            cat new_articles.txt; echo ""
+            echo "Vérifiez le rendu sur https://acartaud.github.io/alicecartaud/publi.html"
+          } > mail_body.txt
+
+      - name: Mail - nouveaux articles
+        if: steps.update.outputs.new == 'true'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server: ${{ secrets.SMTP_SERVER }}
+          port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.EMAIL_FROM }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          from: ${{ secrets.EMAIL_FROM }}
+          to: ${{ secrets.EMAIL_TO }}
+          subject: "[site web] Nouveaux articles publiés"
+          body: file://mail_body.txt
+
+      - name: Mail - échec du job
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server: ${{ secrets.SMTP_SERVER }}
+          port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.EMAIL_FROM }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          from: ${{ secrets.EMAIL_FROM }}
+          to: ${{ secrets.EMAIL_TO }}
+          subject: "[site web] ERREUR mise à jour des publications"
+          body: |
+            La mise à jour automatique de publi.html a échoué.
+            Cause probable : Google Scholar a bloqué la requête.
+            Relancez manuellement le workflow ou vérifiez le log :
+            https://github.com/acartaud/alicecartaud/actions
