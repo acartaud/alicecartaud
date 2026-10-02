@@ -44,6 +44,8 @@ jobs:
           { echo "De nouveaux articles ont été détectés sur Google Scholar"
             echo "et ajoutés automatiquement à publi.html :"; echo ""
             cat new_articles.txt; echo ""
+            echo "Penser à ajouter le lien vers le matériel au besoin (zenodo, osf,...)"
+            echo ""
             echo "Vérifiez le rendu sur https://acartaud.github.io/alicecartaud/publi.html"
           } > mail_body.txt
 
